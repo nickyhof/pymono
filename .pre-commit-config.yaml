@@ -1,0 +1,23 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.0
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: local
+    hooks:
+      - id: check-workspace
+        name: Check workspace conventions
+        entry: uv run python scripts/check_deps.py
+        language: system
+        pass_filenames: false
+        files: 'pyproject\.toml$'
+
+      - id: check-lock
+        name: Check uv.lock is in sync
+        entry: bash scripts/check_lock.sh
+        language: system
+        pass_filenames: false
+        files: '(pyproject\.toml|uv\.lock)$'

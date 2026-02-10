@@ -1,0 +1,63 @@
+[project]
+name = "pymono"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = []
+
+[tool.uv.workspace]
+members = ["libs/*", "apps/*"]
+
+# All third-party dependencies are centralized here.
+# Members should only declare workspace (internal) dependencies.
+[dependency-groups]
+dev = ["ruff", "pytest", "pytest-cov", "import-linter", "ty", "pre-commit"]
+
+# ── Shared Ruff Config ──────────────────────────────────
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "SIM",  # flake8-simplify
+    "RUF",  # ruff-specific rules
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["shared", "myapp"]
+
+# ── Shared Pytest Config ────────────────────────────────
+[tool.pytest.ini_options]
+testpaths = ["libs", "apps"]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
+addopts = "-v --tb=short --cov --cov-report=term-missing"
+
+# ── Type Checking (ty) ──────────────────────────────────
+# ty needs to know where workspace packages live for cross-package imports.
+# Since ty doesn't support globs, we list each member's src dir explicitly.
+[tool.ty.environment]
+python-version = "3.12"
+extra-paths = ["libs/shared/src", "apps/myapp/src"]
+
+# ── Import Linter Config ────────────────────────────────
+[tool.importlinter]
+root_packages = ["shared", "myapp"]
+
+[[tool.importlinter.contracts]]
+name = "Apps cannot import from other apps"
+type = "independence"
+modules = ["myapp"]
+
+[[tool.importlinter.contracts]]
+name = "Libs cannot import from apps"
+type = "forbidden"
+source_modules = ["shared"]
+forbidden_modules = ["myapp"]
