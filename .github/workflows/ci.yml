@@ -11,7 +11,57 @@ env:
   PYTHON_VERSION: "3.12"
 
 jobs:
-  # ── Guardrails (always runs fully) ────────────────────
+  # ── Detect affected packages ──────────────────────────
+  detect:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    outputs:
+      all: ${{ steps.affected.outputs.all }}
+      lint_paths: ${{ steps.affected.outputs.lint_paths }}
+      src_paths: ${{ steps.affected.outputs.src_paths }}
+      test_paths: ${{ steps.affected.outputs.test_paths }}
+      has_changes: ${{ steps.affected.outputs.has_changes }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: ${{ env.UV_VERSION }}
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Determine affected packages
+        id: affected
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            # On push to main, run everything
+            result=$(uv run python scripts/affected.py --all)
+          else
+            result=$(uv run python scripts/affected.py --base origin/main)
+          fi
+          echo "$result" | jq .
+
+          all=$(echo "$result" | jq -r '.all')
+          lint_paths=$(echo "$result" | jq -r '.lint_paths | join(" ")')
+          src_paths=$(echo "$result" | jq -r '.src_paths | join(" ")')
+          test_paths=$(echo "$result" | jq -r '.test_paths | join(" ")')
+          packages=$(echo "$result" | jq -r '.packages | join(" ")')
+          has_changes=$( [ -n "$packages" ] && echo "true" || echo "false" )
+
+          echo "all=$all" >> "$GITHUB_OUTPUT"
+          echo "lint_paths=$lint_paths" >> "$GITHUB_OUTPUT"
+          echo "src_paths=$src_paths" >> "$GITHUB_OUTPUT"
+          echo "test_paths=$test_paths" >> "$GITHUB_OUTPUT"
+          echo "has_changes=$has_changes" >> "$GITHUB_OUTPUT"
+
+          echo "### Affected Packages" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **All:** $all" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Packages:** $packages" >> "$GITHUB_STEP_SUMMARY"
+
+  # ── Guardrails (always full) ──────────────────────────
   guardrails:
     name: Workspace Guardrails
     runs-on: ubuntu-latest
@@ -38,10 +88,12 @@ jobs:
       - name: Check lock file drift
         run: bash scripts/check_lock.sh
 
-  # ── Lint (always runs fully) ──────────────────────────
+  # ── Lint (selective) ──────────────────────────────────
   lint:
-    name: Lint & Typecheck
+    name: Lint
     runs-on: ubuntu-latest
+    needs: [detect]
+    if: needs.detect.outputs.has_changes == 'true'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -62,55 +114,27 @@ jobs:
           uv pip install -e libs/* -e apps/*
 
       - name: Ruff check
-        run: uv run ruff check .
+        run: |
+          PATHS="${{ needs.detect.outputs.lint_paths }}"
+          if [ "${{ needs.detect.outputs.all }}" = "true" ]; then PATHS="."; fi
+          echo "→ Linting: $PATHS"
+          uv run ruff check $PATHS
 
       - name: Ruff format check
-        run: uv run ruff format --check .
+        run: |
+          PATHS="${{ needs.detect.outputs.lint_paths }}"
+          if [ "${{ needs.detect.outputs.all }}" = "true" ]; then PATHS="."; fi
+          uv run ruff format --check $PATHS
 
       - name: Import boundary check
         run: uv run lint-imports
 
-      - name: Type check (ty)
-        run: uv run ty check
-
-  # ── Detect Changes ────────────────────────────────────
-  changes:
-    name: Detect Changes
+  # ── Typecheck (selective) ─────────────────────────────
+  typecheck:
+    name: Typecheck
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
-    outputs:
-      test_paths: ${{ steps.detect.outputs.test_paths }}
-      has_changes: ${{ steps.detect.outputs.has_changes }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - uses: astral-sh/setup-uv@v5
-        with:
-          version: ${{ env.UV_VERSION }}
-
-      - name: Install dependencies
-        run: |
-          uv sync
-          uv pip install -e libs/* -e apps/*
-
-      - name: Detect changed packages
-        id: detect
-        run: |
-          result=$(uv run python scripts/detect_changes.py --base origin/main)
-          echo "$result"
-          test_paths=$(echo "$result" | jq -r '.test_paths | join(" ")')
-          has_changes=$( [ -n "$test_paths" ] && echo "true" || echo "false" )
-          echo "test_paths=$test_paths" >> "$GITHUB_OUTPUT"
-          echo "has_changes=$has_changes" >> "$GITHUB_OUTPUT"
-
-  # ── Tests (selective on PRs, full on main) ────────────
-  test:
-    name: Test
-    runs-on: ubuntu-latest
-    needs: [changes]
-    if: always() && (needs.changes.result == 'skipped' || needs.changes.outputs.has_changes == 'true')
+    needs: [detect]
+    if: needs.detect.outputs.has_changes == 'true'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -130,12 +154,41 @@ jobs:
           uv sync
           uv pip install -e libs/* -e apps/*
 
-      - name: Run tests (selective)
-        if: github.event_name == 'pull_request' && needs.changes.outputs.test_paths != ''
+      - name: Type check (ty)
         run: |
-          uv run pytest ${{ needs.changes.outputs.test_paths }} --cov --cov-report=term-missing
+          PATHS="${{ needs.detect.outputs.src_paths }}"
+          if [ "${{ needs.detect.outputs.all }}" = "true" ]; then PATHS="."; fi
+          echo "→ Type checking: $PATHS"
+          uv run ty check $PATHS
 
-      - name: Run tests (full)
-        if: github.event_name == 'push'
+  # ── Test (selective) ──────────────────────────────────
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    needs: [detect]
+    if: needs.detect.outputs.has_changes == 'true'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Pin guardrails from main
+        if: github.event_name == 'pull_request'
         run: |
-          uv run pytest --cov --cov-report=term-missing
+          git checkout origin/main -- scripts/ pyproject.toml .python-version
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: ${{ env.UV_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          uv sync
+          uv pip install -e libs/* -e apps/*
+
+      - name: Run tests
+        run: |
+          PATHS="${{ needs.detect.outputs.test_paths }}"
+          if [ "${{ needs.detect.outputs.all }}" = "true" ]; then PATHS="."; fi
+          echo "→ Testing: $PATHS"
+          uv run pytest $PATHS --cov --cov-report=term-missing

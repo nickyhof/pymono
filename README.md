@@ -14,7 +14,7 @@ pymono/
 │   ├── check_deps.py           # Workspace convention linter (11 checks)
 │   ├── check_lock.sh           # Lock file drift detector
 │   ├── dep_graph.py            # Dependency graph generator (Mermaid)
-│   └── detect_changes.py       # Selective CI change detection
+│   └── affected.py             # Selective build change detection
 ├── docs/
 │   └── dependency-graph.md     # Auto-generated dependency graph
 ├── libs/                       # Shared libraries
@@ -42,6 +42,15 @@ make test          # pytest with coverage
 make graph         # generate dependency graph
 make format        # auto-format code
 make clean         # remove caches and artifacts
+
+# Selective builds (only affected packages)
+make lint SCOPE=auto
+make typecheck SCOPE=auto
+make test SCOPE=auto
+make check SCOPE=auto
+
+# Explicit package scope
+make test SCOPE="libs/shared apps/myapp"
 ```
 
 ## Adding Packages
@@ -129,18 +138,19 @@ Hooks run automatically on `git commit`:
 
 ## CI
 
-The GitHub Actions workflow (`.github/workflows/ci.yml`) runs four jobs:
+The GitHub Actions workflow (`.github/workflows/ci.yml`) runs five jobs:
 
 | Job | Scope | Description |
 |---|---|---|
+| **detect** | Always | Determines which packages are affected |
 | **guardrails** | Always full | Workspace conventions + lock drift |
-| **lint** | Always full | ruff + format + import-linter + ty |
-| **changes** | PRs only | Detects which packages changed |
-| **test** | Selective on PRs, full on main | pytest with coverage for affected packages |
+| **lint** | Selective | ruff + format + import-linter |
+| **typecheck** | Selective | ty type checker |
+| **test** | Selective | pytest with coverage |
 
-### Selective Testing
+### Selective Builds
 
-On PRs, the `changes` job runs `scripts/detect_changes.py` to identify which packages were modified. The `test` job only tests affected packages **plus their transitive dependents**. Root config changes (pyproject.toml, scripts/, etc.) trigger full testing.
+The `detect` job runs `scripts/affected.py` to identify changed packages and their transitive dependents. Downstream jobs (lint, typecheck, test) only run on affected paths. Infrastructure changes (`pyproject.toml`, `scripts/`, etc.) automatically escalate to full runs. Pushes to `main` always run everything.
 
 ### CI Tamper Protection
 

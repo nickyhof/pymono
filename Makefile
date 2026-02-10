@@ -7,27 +7,58 @@ install: ## Install all dependencies + workspace packages
 	uv sync
 	uv pip install -e libs/* -e apps/*
 
-lint: ## Run ruff linter + import boundary checks
-	uv run ruff check .
-	uv run ruff format --check .
+# ── Scope resolution ────────────────────────────────────
+# Usage:
+#   make lint                     → full run
+#   make lint SCOPE=auto          → only affected packages (vs origin/main)
+#   make lint SCOPE="libs/shared" → explicit paths
+#
+# Same for: typecheck, test, check
+
+_resolve_scope = $(if $(filter auto,$(SCOPE)),\
+	$(shell uv run python scripts/affected.py --base origin/main 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(' '.join(d.get('$(1)',[])) if not d['all'] else '.')" 2>/dev/null || echo "."),\
+	$(if $(SCOPE),$(SCOPE),.))
+
+lint: ## Lint code [SCOPE=auto|paths]
+	$(eval LINT_PATHS := $(call _resolve_scope,lint_paths))
+	@if [ "$(LINT_PATHS)" = "." ]; then \
+		echo "→ Linting: all packages"; \
+	else \
+		echo "→ Linting: $(LINT_PATHS)"; \
+	fi
+	uv run ruff check $(LINT_PATHS)
+	uv run ruff format --check $(LINT_PATHS)
 	uv run lint-imports
 
-format: ## Auto-format code with ruff
-	uv run ruff check --fix .
-	uv run ruff format .
+format: ## Auto-format code [SCOPE=auto|paths]
+	$(eval FMT_PATHS := $(call _resolve_scope,lint_paths))
+	uv run ruff check --fix $(FMT_PATHS)
+	uv run ruff format $(FMT_PATHS)
 
-typecheck: ## Run ty type checker
-	uv run ty check
+typecheck: ## Type check [SCOPE=auto|paths]
+	$(eval TC_PATHS := $(call _resolve_scope,src_paths))
+	@if [ "$(TC_PATHS)" = "." ]; then \
+		echo "→ Type checking: all packages"; \
+	else \
+		echo "→ Type checking: $(TC_PATHS)"; \
+	fi
+	uv run ty check $(TC_PATHS)
 
-test: ## Run tests with coverage
-	uv run pytest --cov --cov-report=term-missing
+test: ## Run tests with coverage [SCOPE=auto|paths]
+	$(eval TEST_PATHS := $(call _resolve_scope,test_paths))
+	@if [ "$(TEST_PATHS)" = "." ]; then \
+		echo "→ Testing: all packages"; \
+	else \
+		echo "→ Testing: $(TEST_PATHS)"; \
+	fi
+	uv run pytest $(TEST_PATHS) --cov --cov-report=term-missing
 
-check: ## Run all guardrails + lint + typecheck + test
+check: ## Run all guardrails + lint + typecheck + test [SCOPE=auto|paths]
 	uv run python scripts/check_deps.py
 	bash scripts/check_lock.sh
-	$(MAKE) lint
-	$(MAKE) typecheck
-	$(MAKE) test
+	$(MAKE) lint SCOPE=$(SCOPE)
+	$(MAKE) typecheck SCOPE=$(SCOPE)
+	$(MAKE) test SCOPE=$(SCOPE)
 
 graph: ## Generate dependency graph
 	uv run python scripts/dep_graph.py
