@@ -57,7 +57,9 @@ jobs:
           version: ${{ env.UV_VERSION }}
 
       - name: Install dependencies
-        run: uv sync
+        run: |
+          uv sync
+          uv pip install -e libs/* -e apps/*
 
       - name: Ruff check
         run: uv run ruff check .
@@ -89,7 +91,9 @@ jobs:
           version: ${{ env.UV_VERSION }}
 
       - name: Install dependencies
-        run: uv sync
+        run: |
+          uv sync
+          uv pip install -e libs/* -e apps/*
 
       - name: Detect changed packages
         id: detect
@@ -122,7 +126,9 @@ jobs:
           version: ${{ env.UV_VERSION }}
 
       - name: Install dependencies
-        run: uv sync
+        run: |
+          uv sync
+          uv pip install -e libs/* -e apps/*
 
       - name: Run tests (selective)
         if: github.event_name == 'pull_request' && needs.changes.outputs.test_paths != ''
